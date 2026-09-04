@@ -22,18 +22,13 @@ process_arguments() {
       WORK_ITEM="$2"
       shift
       ;;
-    *)
-      show_usage
-      exit 1
-      ;;
     esac
     shift
   done
 }
 
 show_usage() {
-  echo "Usage: $0 -p <project> -w <workitem>
-  Reviews work item.
+  echo "Usage: $0 -p <project> -w <workitem> <prompt>
   -p (--project):               Project name
   -w (--workitem):               Azure DevOps work item number."
 }
@@ -44,33 +39,24 @@ if [[ -z $TFS_BASE_URL ]]; then
 fi;
 
 process_arguments $@
+PROMPT=${!#}
 
-if [[ -z $PROJECT || -z $WORK_ITEM ]]; then
+if [[ -z $PROJECT || -z $WORK_ITEM || $PROMPT = $WORK_ITEM || $PROMPT = $PROJECT ]]; then
   show_usage;
   exit 1;
 fi;
 
 PROJECT_URL="${TFS_BASE_URL%/}/${PROJECT}"
-PROMPT="
+CONTEXT="
 Preface:
 1. For this task you shall use only curl, Azure DevOps API and TFS_PAT environment variable for Basic authentication. 
 2. When you are required to post a comment:
 2.1. Translate it to russian language before posting;
 2.2. Comment should be in HTML format;
-2.3. The last line of a comment should be your current session ID.
+2.3. The last line of a comment should be your current session ID;
+3. Project URL is ${PROJECT_URL}, Work item ID is ${WORK_ITEM}.
+"
 
-Task:
-The task is to review a software development work item \"${WORK_ITEM}\" at \"${PROJECT_URL}\".
-
-1. Check if the work item has any changesets. If there are none, then post a comment stating this fact and consider your task complete. If there are changesets, then you should focus on fulfillment of the work item's description based on its changesets. 
-2. The second priority is to review code in the work item's changesets. See for possible bugs, security vulnerabilities, grammar.
-
-If you have found any issues:
-1. Post a comment for the owner of work item with your objections;
-2. Move the work item to \"Active\" state and in \"Remaining Work\" field set a value in hours that you think is required to fix the issues.
-
-If none of the issues have been found, then post the LGTM comment."
-
-codex exec \
+echo ${CONTEXT} | codex exec \
   --skip-git-repo-check \
-  "${PROMPT}";
+  "${PROMPT}"
