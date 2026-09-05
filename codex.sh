@@ -2,17 +2,13 @@
 set -e
 PROJECT=""
 WORK_ITEM=""
-MODE=0
-MODE_REVIEW=1
-REQUIRE_COMMENT=1
 PROMPT=""
 
-# Flag map:
-# | REVIEW | PUBLISH |
 FLAG=0
+# Flag map:
+# | DIAG | REVIEW | PUBLISH |
 
 process_arguments() {
-  echo $#
   while [[ "$#" -gt "0" ]]; do
     case "$1" in
     "--project" | "-p")
@@ -31,14 +27,18 @@ process_arguments() {
       WORK_ITEM="$2"
       shift
       ;;
-    "--review")
-      FLAG=$(($FLAG + 2**1))
-      ;;
     "--publish")
-      FLAG=$(($FLAG + 2**0))
+      FLAG=$((FLAG + 2**0))
+      ;;
+    "--review")
+      FLAG=$((FLAG + 2**1))
+      ;;
+    "--diag" | "-d")
+      FLAG=$((FLAG + 2**2))
       ;;
     *)
-      PROMPT="$1"
+      PROMPT="$*"
+      break
       ;;
     esac
     shift
@@ -46,20 +46,32 @@ process_arguments() {
 }
 
 show_usage() {
-    echo "Usage: $0 -p <project> -w <workitem>  [--review] [--publish] [<prompt>]
-    -p (--project):               Project name
-    -w (--workitem):              Azure DevOps work item number
-    --review:                     Perform review of the work item
-    --publish:                    Publish result as a comment"
+    echo "Usage: $0 -p <project> -w <workitem> [--review] [--publish] [--diag]] [<prompt>]
+    -p, --project:               Project name
+    -w, --workitem:              Azure DevOps work item number
+    -d, --diag:                  Diagnostic mode: prints command without calling AI
+    --review:                    Perform review of the work item
+    --publish:                   Publish result as a comment"
+}
+
+write_stderr() {
+  echo "$0: $*" 1>&2
+  exit 1;
 }
 
 run_codex() {
-  echo "echo ${CONTEXT} | codex exec --skip-git-repo-check "$*""
+  if [[ $((FLAG >> 2)) -eq 1 ]]; then
+    echo "echo ${CONTEXT} | codex exec --skip-git-repo-check "$*""
+  else
+    echo ${CONTEXT} | codex exec --skip-git-repo-check "$*"
+  fi;
 }
 
 if [[ -z $TFS_BASE_URL ]]; then
-  echo "[ERROR]: The environment variable \"TFS_BASE_URL\" is not set. Example of the value: \"https://tfs.company.com/DefaultCollection\""
-  exit 1;
+  write_stderr "The environment variable \"TFS_BASE_URL\" is not set. Example of the value: \"https://tfs.company.com/DefaultCollection\""
+fi;
+if [[ -z $TFS_PAT ]]; then
+  write_stderr "The environment variable \"TFS_PAT\" is not set."
 fi;
 
 process_arguments "$@"
@@ -72,14 +84,14 @@ fi;
 PROJECT_URL="${TFS_BASE_URL%/}/${PROJECT}"
 CONTEXT="
 Preface:
-1. For this task you should use only curl, Azure DevOps API and TFS_PAT environment variable for Basic authentication. 
+1. For this task you should use only curl, Azure DevOps API and TFS_PAT environment variable for Basic authentication.
 2. When you are required to post a comment to Azure DevOps:
-2.1. Translate it to russian language before posting;
-2.2. Comment should be in HTML format;
-2.3. The last paragraph of a new comment should be in a format: \"Session ID: {your session ID}\";
+  2.1. Translate it to russian language before posting;
+  2.2. Comment should be in HTML format;
+  2.3. The last paragraph of a new comment should be in a format: \"Session ID: {current session ID}\";
 3. Target work item has ID ${WORK_ITEM} located at ${PROJECT_URL}."
 
-if [[ $MODE = $MODE_REVIEW ]]; then
+if [[ $((FLAG >> 1)) -eq 1 ]]; then
   PROMPT="
 The task is to review the target software development work item.
 
@@ -88,15 +100,14 @@ Steps:
 2. The second priority is to review code in the work item's changesets. See for possible bugs, security vulnerabilities, grammar.
 
 If you have found any issues:
-1. Post a comment for the owner of work item with your objections;
-2. Move the work item to \"Active\" state and in \"Remaining Work\" field set a value in hours that you think is required to fix the issues.
+1. Move the work item to \"Active\" state and in \"Remaining Work\" field set a value in hours that you think is required to fix the issues.
+2. Post a comment for the owner of work item with your objections;
 
 If none of the issues have been found, then post the LGTM comment."
 fi;
 
 if [[ -z $PROMPT ]]; then
-  echo [ERROR] Prompt is empty.
-  exit 1;
+  write_stderr "Prompt is empty."
 fi;
 
 run_codex $PROMPT
