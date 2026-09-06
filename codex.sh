@@ -73,12 +73,14 @@ run_codex() {
         -c sandbox_mode=workspace-write 
         -c sandbox_workspace_write.network_access=true
         --skip-git-repo-check
+        --json
          "$*"";
     else
       echo "echo ${CONTEXT} | codex exec
         -c sandbox_mode=workspace-write 
         -c sandbox_workspace_write.network_access=true
         --skip-git-repo-check
+        --json
         "$*"";
     fi;
   else
@@ -86,12 +88,16 @@ run_codex() {
       codex exec resume \
           -c sandbox_mode=workspace-write \
           -c sandbox_workspace_write.network_access=true \
-          --skip-git-repo-check "${SESSION_ID}" "$*";
+          --skip-git-repo-check "${SESSION_ID}" \
+          --json \
+          "$*";
     else
       echo ${CONTEXT} | codex exec \
         -c sandbox_mode=workspace-write \
         -c sandbox_workspace_write.network_access=true \
-        --skip-git-repo-check "$*";
+        --skip-git-repo-check \
+        --json \
+        "$*";
     fi;
   fi;
 }
