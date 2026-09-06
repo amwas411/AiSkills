@@ -3,10 +3,11 @@ set -e
 PROJECT=""
 WORK_ITEM=""
 PROMPT=""
+SESSION_ID=""
 
 FLAG=0
 # Flag map:
-# | DIAG | REVIEW | PUBLISH |
+# | DIAG | REVIEW |
 
 process_arguments() {
   while [[ "$#" -gt "0" ]]; do
@@ -27,14 +28,19 @@ process_arguments() {
       WORK_ITEM="$2"
       shift
       ;;
-    "--publish")
-      FLAG=$((FLAG + 2**0))
+    "--session" | "-s")
+      if [[ -z "$2" ]]; then
+        show_usage
+        exit 1
+      fi
+      SESSION_ID="$2"
+      shift
       ;;
     "--review")
-      FLAG=$((FLAG + 2**1))
+      FLAG=$((FLAG + 2**0))
       ;;
     "--diag" | "-d")
-      FLAG=$((FLAG + 2**2))
+      FLAG=$((FLAG + 2**1))
       ;;
     *)
       PROMPT="$*"
@@ -46,12 +52,13 @@ process_arguments() {
 }
 
 show_usage() {
-    echo "Usage: $0 -p <project> -w <workitem> [--review] [--publish] [--diag]] [<prompt>]
+    echo "Usage: $0 -p <project> -w <workitem> [--diag] [--session <session_id>] [--review] [<prompt>]
     -p, --project:               Project name
     -w, --workitem:              Azure DevOps work item number
     -d, --diag:                  Diagnostic mode: prints command without calling AI
-    --review:                    Perform review of the work item
-    --publish:                   Publish result as a comment"
+    -s, --session:               Resume session
+    --cd:                        Set working directory
+    --review:                    Perform review of the work item"
 }
 
 write_stderr() {
@@ -60,10 +67,32 @@ write_stderr() {
 }
 
 run_codex() {
-  if [[ $((FLAG >> 2)) -eq 1 ]]; then
-    echo "echo ${CONTEXT} | codex exec --skip-git-repo-check -o output.txt "$*""
+  if [[ $((FLAG >> 1)) -eq 1 ]]; then
+    if [[ ! -z $SESSION_ID ]]; then 
+      echo "codex exec resume ${SESSION_ID} 
+        -c sandbox_mode=workspace-write 
+        -c sandbox_workspace_write.network_access=true
+        --skip-git-repo-check
+         "$*"";
+    else
+      echo "echo ${CONTEXT} | codex exec
+        -c sandbox_mode=workspace-write 
+        -c sandbox_workspace_write.network_access=true
+        --skip-git-repo-check
+        "$*"";
+    fi;
   else
-    echo ${CONTEXT} | codex exec --skip-git-repo-check -o output.txt "$*"
+    if [[ ! -z $SESSION_ID ]]; then 
+      codex exec resume \
+          -c sandbox_mode=workspace-write \
+          -c sandbox_workspace_write.network_access=true \
+          --skip-git-repo-check "${SESSION_ID}" "$*";
+    else
+      echo ${CONTEXT} | codex exec \
+        -c sandbox_mode=workspace-write \
+        -c sandbox_workspace_write.network_access=true \
+        --skip-git-repo-check "$*";
+    fi;
   fi;
 }
 
@@ -87,19 +116,13 @@ CONTEXT="
 Preface:
 1. For this task you should use only Azure DevOps API and TFS_PAT environment variable for Basic authentication. Version control system is TFVC.
 2. Target work item has ID \"${WORK_ITEM}\" and is located at \"${PROJECT_URL}\";
-3. Before proceding to the task you must post a comment about work in progress;
-4. Summary on any task completion must be posted as a comment in the target work item;
-5. When you are required to post a comment to Azure DevOps or set work item's \"Description\" field:
-  5.1. Translate it to russian language before posting;
-  5.2. Format it to HTML;
-  5.3. The last paragraph of a new comment should be in format: \"Session ID: {your current session ID}\";
-6. If you are required to write code then you must post it as a part of the summary comment."
-
-# These instructions are not needed right now, they are unstable also.
-# When you are required to write a code:
-#   1. The work item's \"State\" field must be set to \"${ACTIVE_STATE_NAME}\", and the comment about work in progress should be posted;
-#   2. When your code is ready, a new changeset must be pushed with its description translated to russian language. The changeset must be bound to the work item;
-#   3. The work item's \"State\" field must be set to \"${RESOLVED_STATE_NAME}\"
+3. There two types of Azure DevOps comments that must be posted in the target work item:
+  3.1. Before proceding to the task you must post a comment about work in progress in the target Azure DevOps work item. The term for this type of comment is \"Starting comment\";
+  3.2. Your last message must be post as a comment in the target Azure DevOps work item. The term for this type of comment is \"Result comment\";
+4. When you are posting a comment to Azure DevOps or setting work item's \"Description\" field you must follow the rules:
+  4.1. Translate a comment to russian language before posting;
+  4.2. Format it to HTML;
+  4.3. The last paragraph of a comment should be in format: \"Session ID: {your current session ID}\""
 
 # Notes for Windows:
 # 1. Using powershell command "Invoke-WebRequest" inside codex results in SEC_E_NO_CREDENTIALS error. That is a bug, see https://github.com/openai/codex/issues/17459. Workaround is to require an agent to use python for making any API requests.
@@ -107,23 +130,22 @@ Preface:
 if [[ $OS = "Windows_NT" ]]; then
   CONTEXT=$CONTEXT";
 Tool usage requirements:
-  a. Every time crafting a powershell command you must place \"\$OutputEncoding = [System.Text.Encoding]::UTF8;\" line as its first line.
-  b. Use only python for making any API requests. If python is not available then raise an error and stop processing."
+  1. Every time crafting a powershell command you must place \"\$OutputEncoding = [System.Text.Encoding]::UTF8;\" line as its first line.
+  2. Use only python for making any API requests. If python is not available then stop processing."
 fi;
 
-if [[ $((FLAG >> 1)) -eq 1 ]]; then
+if [[ $((FLAG % 2)) -eq 1 ]]; then
   PROMPT="
 The task is to review the target software development work item.
 
 Steps:
-1. Check if the work item has any changesets. If there are none, then post a comment stating this fact and consider your task complete. If there are changesets, then you should focus on fulfillment of the work item's description based on its changesets. 
-2. The second priority is to review code in the work item's changesets.
+1. Check if the work item has any changesets. If there are none, then consider your task complete. If there are changesets, then you should focus on fulfillment of the work item's description based on its changesets.
+2. Review code in the work item's changesets.
 
-If you have found any issues:
-1. Move the work item to \"Active\" state and in \"Remaining Work\" field set a value in hours that you think is required to fix the issues.
-2. Post a comment for the owner of work item with your objections;
+If you have found any issues, post a result comment for the owner of work item with your objections;
 
-If none of the issues have been found, then post the LGTM comment."
+If changesets exist and none of the issues have been found, then post the LGTM result comment and consider your task complete."
+
 fi;
 
 if [[ -z $PROMPT ]]; then
